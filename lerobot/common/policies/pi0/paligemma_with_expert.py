@@ -246,6 +246,8 @@ class PaliGemmaWithExpertModel(PreTrainedModel):
                 hidden_shape = (*input_shape, -1, layer.self_attn.head_dim)
 
                 hidden_states = hidden_states.to(dtype=torch.bfloat16)
+                # hidden_states的类型是torch.bfloat16，转成float32
+                # hidden_states = hidden_states.to(dtype=torch.float32)
                 query_state = layer.self_attn.q_proj(hidden_states).view(hidden_shape)
                 key_state = layer.self_attn.k_proj(hidden_states).view(hidden_shape)
                 value_state = layer.self_attn.v_proj(hidden_states).view(hidden_shape)

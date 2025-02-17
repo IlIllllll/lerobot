@@ -109,14 +109,27 @@ def wrap(config_path: Path | None = None):
             else:
                 cli_args = sys.argv[1:]
                 config_path_cli = parse_arg("config_path", cli_args)
+                
+                # 检查是否有路径参数
                 if has_method(argtype, "__get_path_fields__"):
                     path_fields = argtype.__get_path_fields__()
+                    path_args = {field: get_path_arg(field, cli_args) for field in path_fields}
                     cli_args = filter_path_args(path_fields, cli_args)
+                    
+                    # 如果有路径参数，优先使用 from_pretrained 加载
+                    for field, path in path_args.items():
+                        if path and has_method(argtype, "from_pretrained"):
+                            cli_args = filter_arg(field, cli_args)
+                            cfg = argtype.from_pretrained(path, cli_args=cli_args)
+                            return fn(cfg, *args, **kwargs)
+                
+                # 处理主配置路径
                 if has_method(argtype, "from_pretrained") and config_path_cli:
                     cli_args = filter_arg("config_path", cli_args)
                     cfg = argtype.from_pretrained(config_path_cli, cli_args=cli_args)
                 else:
                     cfg = draccus.parse(config_class=argtype, config_path=config_path, args=cli_args)
+            
             response = fn(cfg, *args, **kwargs)
             return response
 
