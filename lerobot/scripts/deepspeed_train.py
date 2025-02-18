@@ -65,21 +65,6 @@ def update_policy(
     use_amp: bool = False,
     lock=None,
 ) -> tuple[MetricsTracker, dict]:
-    if hasattr(train_metrics, 'get_step'):
-        current_step = train_metrics.get_step()
-    else:
-        current_step = train_metrics.current_step
-        
-    if current_step % 100 == 0:  # Every 100 steps
-        logging.info(f"Parameter states at step {current_step}:")
-        for name, param in policy.named_parameters():
-            if param.grad is not None:
-                logging.info(f"Parameter {name} grad stats:")
-                logging.info(f"  - grad mean: {param.grad.mean().item()}")
-                logging.info(f"  - grad std: {param.grad.std().item()}")
-                logging.info(f"  - grad max: {param.grad.max().item()}")
-                logging.info(f"  - grad min: {param.grad.min().item()}")
-
     start_time = time.perf_counter()
     device = get_device_from_parameters(policy)
     with torch.autocast(device_type=device.type) if use_amp else nullcontext():
@@ -112,6 +97,32 @@ def update_policy(
     train_metrics.update_s = time.perf_counter() - start_time
     return train_metrics, output_dict
 
+def debug_model_dtypes(model: PreTrainedPolicy):
+    """打印所有模型参数的数据类型信息"""
+    dtype_counts = {}
+    problematic_params = []
+    
+    print("\n=== Model Parameter DTYPEs Analysis ===")
+    for name, param in model.named_parameters():
+        if param.requires_grad:  # 只检查需要训练的参数
+            dtype = str(param.dtype)
+            dtype_counts[dtype] = dtype_counts.get(dtype, 0) + 1
+            
+            # 如果不是float32，记录下来
+            if param.dtype != torch.float32:
+                problematic_params.append((name, param.dtype, param.shape))
+    
+    print("\nDtype distribution:")
+    for dtype, count in dtype_counts.items():
+        print(f"{dtype}: {count} parameters")
+    
+    if problematic_params:
+        print("\nParameters not in float32:")
+        for name, dtype, shape in problematic_params:
+            print(f"- {name}: {dtype} (shape: {shape})")
+    
+    print("\n=======================================")
+    return problematic_params
 
 @parser.wrap()
 def train(cfg: TrainPipelineConfig):
@@ -150,6 +161,8 @@ def train(cfg: TrainPipelineConfig):
         device=device,
         ds_meta=dataset.meta,
     )
+
+    debug_model_dtypes(policy)  
 
     # Count parameters by dtype
     dtype_param_counts = {}
@@ -217,23 +230,18 @@ def train(cfg: TrainPipelineConfig):
                 "warmup_num_steps": 1000
             }
         },
-        "fp16": {
-            "enabled": True,
-            "loss_scale": 128,
-            "loss_scale_window": 128,
-            "hysteresis": 2,
-            "min_loss_scale": 1
-        },
         "zero_optimization": {
-            "stage": 3,
-            "stage3_max_live_parameters": 1e9,
-            "stage3_max_reuse_distance": 1e9,
-            "stage3_param_persistence_threshold": 1e6,
-            "contiguous_gradients": True,
+            "stage": 2,
+            "offload_optimizer": {，
+                "device": "cpu",
+                "pin_memory": True
+            },
+            "allgather_partitions": True,
+            "allgather_bucket_size": 2e8,
             "overlap_comm": True,
-            "reduce_bucket_size": 5e7,
-            "stage3_prefetch_bucket_size": 5e7,
-            "stage3_param_persistence_threshold": 1e5
+            "reduce_scatter": True,
+            "reduce_bucket_size": 2e8,
+            "contiguous_gradients": True
         }
     }
 
@@ -343,4 +351,4 @@ if __name__ == "__main__":
 
 
 # export NCCL_P2P_DISABLE=1
-# deepspeed lerobot/scripts/deepspeed_train.py --policy.path=/gemini/data-1/pi0 --dataset.local_files_only=true --dataset.repo_id=tape_grab_three_new --batch_size=1 --num_workers=4  --steps=100  --log_freq=2 --save_freq=4
+# deepspeed lerobot/scripts/deepspeed_train.py --policy.path=/gemini/data-1/pi0 --dataset.local_files_only=true --dataset.repo_id=tape_grab_three_new --batch_size=1 --num_workers=2  --steps=1000  --log_freq=500 --save_freq=500
